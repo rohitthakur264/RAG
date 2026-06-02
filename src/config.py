@@ -27,7 +27,7 @@ class AppConfig:
     embedding_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
 
     # LLM (HuggingFace Inference API - free tier)
-    llm_model_name: str = "mistralai/Mistral-7B-Instruct-v0.3"
+    llm_model_name: str = "HuggingFaceH4/zephyr-7b-beta"
     hf_api_token: str = field(default_factory=lambda: os.getenv("HF_API_TOKEN", ""))
     max_new_tokens: int = 512
     temperature: float = 0.3

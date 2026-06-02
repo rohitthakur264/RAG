@@ -26,7 +26,6 @@ Built as a capstone project demonstrating enterprise-grade RAG pipeline implemen
 ## 📸 Project Demo
 
 ![PDF Q&A Chatbot Demo](demo.png)
-*(Replace this placeholder with the actual screenshot of your UI showing the 19 pages/31 chunks)*
 
 ---
 
