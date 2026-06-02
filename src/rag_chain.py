@@ -1,14 +1,14 @@
-"""RAG chain setup with HuggingFace LLM.
+"""RAG chain setup — supports Gemini (primary) and HuggingFace (fallback).
 Orchestrates retrieval and generation for question answering.
 Author: Rohit Thakur
 """
 
 import logging
+import os
 from typing import Dict, Any, Optional
 
-from langchain_huggingface import HuggingFaceEndpoint
-from langchain.chains import RetrievalQA
-from langchain.prompts import PromptTemplate
+from langchain_classic.chains import RetrievalQA
+from langchain_core.prompts import PromptTemplate
 from langchain_community.vectorstores import FAISS
 
 from src.config import config
@@ -31,53 +31,73 @@ Answer:"""
 def get_llm(
     model_name: str = None,
     hf_api_token: str = None,
+    gemini_api_key: str = None,
     max_new_tokens: int = None,
     temperature: float = None,
-) -> HuggingFaceEndpoint:
-    """Initialize the HuggingFace LLM via Inference API.
-
-    Uses the free HuggingFace Inference API — requires an HF_API_TOKEN.
+):
+    """Initialize the LLM — tries Gemini first, then HuggingFace.
 
     Args:
-        model_name: HuggingFace model repository ID.
+        model_name: Model name (used for HuggingFace; Gemini always uses gemini-1.5-flash).
         hf_api_token: HuggingFace API token.
+        gemini_api_key: Google Gemini API key.
         max_new_tokens: Maximum tokens to generate.
         temperature: Sampling temperature.
 
     Returns:
-        HuggingFaceEndpoint LLM instance.
+        LLM instance (ChatGoogleGenerativeAI or HuggingFaceEndpoint).
     """
-    model_name = model_name or config.llm_model_name
     hf_api_token = hf_api_token or config.hf_api_token
-    max_new_tokens = max_new_tokens or config.max_new_tokens
+    gemini_api_key = gemini_api_key or config.gemini_api_key
     temperature = temperature if temperature is not None else config.temperature
+    max_new_tokens = max_new_tokens or config.max_new_tokens
 
+    # ── Try Gemini first ──────────────────────────────────────────────────
+    if gemini_api_key:
+        try:
+            from langchain_google_genai import ChatGoogleGenerativeAI
+            logger.info("Initializing Gemini 1.5 Flash LLM")
+            llm = ChatGoogleGenerativeAI(
+                model="gemini-1.5-flash",
+                google_api_key=gemini_api_key,
+                temperature=temperature,
+                max_output_tokens=max_new_tokens,
+            )
+            return llm
+        except Exception as e:
+            logger.warning(f"Gemini init failed: {e}. Falling back to HuggingFace.")
+
+    # ── Fallback: HuggingFace Inference API ──────────────────────────────
     if not hf_api_token:
         raise ValueError(
-            "HuggingFace API token not found. "
-            "Set the HF_API_TOKEN environment variable."
+            "No API key found. Please set HF_API_TOKEN or GEMINI_API_KEY in your .env file."
         )
 
-    logger.info(f"Initializing LLM: {model_name}")
+    hf_model = model_name or "HuggingFaceH4/zephyr-7b-beta"
+    logger.info(f"Initializing HuggingFace LLM: {hf_model}")
+
+    from langchain_huggingface import HuggingFaceEndpoint
     llm = HuggingFaceEndpoint(
-        repo_id=model_name,
+        repo_id=hf_model,
         huggingfacehub_api_token=hf_api_token,
         max_new_tokens=max_new_tokens,
         temperature=temperature,
         top_p=config.top_p,
+        # Let HF auto-select the best available provider
+        task="text-generation",
     )
     return llm
 
 
 def build_rag_chain(
     vectorstore: FAISS,
-    llm: Optional[HuggingFaceEndpoint] = None,
+    llm=None,
     search_k: int = None,
 ) -> RetrievalQA:
     """Build the RAG (Retrieval-Augmented Generation) chain.
 
-    Connects the FAISS retriever to the HuggingFace LLM with a
-    custom prompt that grounds answers in the document context.
+    Connects the FAISS retriever to the LLM with a custom prompt
+    that grounds answers in the document context.
 
     Args:
         vectorstore: FAISS vector store with document embeddings.

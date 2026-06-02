@@ -9,7 +9,7 @@ from typing import Dict, Any, List, Optional
 from pathlib import Path
 
 import mlflow
-from langchain.schema import Document
+from langchain_core.documents import Document
 
 from src.config import config
 

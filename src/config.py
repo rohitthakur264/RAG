@@ -26,9 +26,10 @@ class AppConfig:
     # Embedding model (HuggingFace - runs locally, no API key needed)
     embedding_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
 
-    # LLM (HuggingFace Inference API - free tier)
-    llm_model_name: str = "HuggingFaceH4/zephyr-7b-beta"
+    # LLM (HuggingFace / Gemini)
+    llm_model_name: str = "gemini-1.5-flash"
     hf_api_token: str = field(default_factory=lambda: os.getenv("HF_API_TOKEN", ""))
+    gemini_api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
     max_new_tokens: int = 512
     temperature: float = 0.3
     top_p: float = 0.95
