@@ -1,23 +1,24 @@
-"""RAG chain setup — supports Gemini (primary) and HuggingFace (fallback).
+"""RAG chain setup — HuggingFace InferenceClient + optional Gemini fallback.
 Orchestrates retrieval and generation for question answering.
 Author: Rohit Thakur
 """
 
 import logging
 import os
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 from langchain_classic.chains import RetrievalQA
 from langchain_core.prompts import PromptTemplate
+from langchain_core.language_models.llms import LLM
 from langchain_community.vectorstores import FAISS
 
 from src.config import config
 
 logger = logging.getLogger(__name__)
 
-# RAG prompt template — instructs the LLM to answer ONLY from the context
+# RAG prompt template
 RAG_PROMPT_TEMPLATE = """You are a helpful assistant that answers questions based on the provided document context.
-Use ONLY the following context to answer the question. If the answer is not found in the context, say:
+Use ONLY the following context to answer the question. If the answer is not in the context, say:
 "I could not find the answer in the uploaded document."
 
 Context:
@@ -28,6 +29,34 @@ Question: {question}
 Answer:"""
 
 
+class HuggingFaceInferenceLLM(LLM):
+    """Thin LangChain wrapper around HuggingFace InferenceClient (chat API)."""
+
+    model: str = "meta-llama/Llama-3.2-3B-Instruct"
+    api_token: str = ""
+    max_new_tokens: int = 512
+    temperature: float = 0.3
+
+    @property
+    def _llm_type(self) -> str:
+        return "huggingface_inference"
+
+    def _call(self, prompt: str, stop=None, run_manager=None, **kwargs) -> str:
+        from huggingface_hub import InferenceClient
+        client = InferenceClient(api_key=self.api_token)
+        response = client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=self.max_new_tokens,
+            temperature=self.temperature,
+        )
+        return response.choices[0].message.content
+
+    @property
+    def _identifying_params(self):
+        return {"model": self.model}
+
+
 def get_llm(
     model_name: str = None,
     hf_api_token: str = None,
@@ -35,65 +64,59 @@ def get_llm(
     max_new_tokens: int = None,
     temperature: float = None,
 ):
-    """Initialize the LLM — tries Gemini first, then HuggingFace.
+    """Initialize the LLM — HuggingFace first, Gemini as fallback.
 
     Args:
-        model_name: Model name (used for HuggingFace; Gemini always uses gemini-1.5-flash).
+        model_name: HuggingFace model repo ID.
         hf_api_token: HuggingFace API token.
-        gemini_api_key: Google Gemini API key.
+        gemini_api_key: Google Gemini API key (optional fallback).
         max_new_tokens: Maximum tokens to generate.
         temperature: Sampling temperature.
 
     Returns:
-        LLM instance (ChatGoogleGenerativeAI or HuggingFaceEndpoint).
+        LLM instance ready for inference.
     """
     hf_api_token = hf_api_token or config.hf_api_token
     gemini_api_key = gemini_api_key or config.gemini_api_key
     temperature = temperature if temperature is not None else config.temperature
     max_new_tokens = max_new_tokens or config.max_new_tokens
 
-    # ── Try Gemini first ──────────────────────────────────────────────────
+    # ── Primary: HuggingFace InferenceClient (chat completions) ──────────
+    if hf_api_token:
+        hf_model = model_name or "meta-llama/Llama-3.2-3B-Instruct"
+        logger.info(f"Initializing HuggingFace LLM: {hf_model}")
+        try:
+            llm = HuggingFaceInferenceLLM(
+                model=hf_model,
+                api_token=hf_api_token,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+            )
+            logger.info("HuggingFace LLM ready")
+            return llm
+        except Exception as e:
+            logger.warning(f"HuggingFace LLM init failed: {e}")
+
+    # ── Fallback: Gemini ──────────────────────────────────────────────────
     if gemini_api_key:
+        logger.info("Trying Gemini 2.0 Flash as fallback...")
         try:
             from langchain_google_genai import ChatGoogleGenerativeAI
-            logger.info("Initializing Gemini 2.0 Flash LLM")
             llm = ChatGoogleGenerativeAI(
                 model="gemini-2.0-flash",
                 google_api_key=gemini_api_key,
                 temperature=temperature,
                 max_output_tokens=max_new_tokens,
             )
+            logger.info("Gemini LLM ready")
             return llm
         except Exception as e:
-            err = str(e)
-            if "RESOURCE_EXHAUSTED" in err or "429" in err:
-                raise ValueError(
-                    "Gemini API rate limit reached (free tier). "
-                    "Please wait a minute and try again, or check your quota at "
-                    "https://ai.dev/rate-limit"
-                )
-            logger.warning(f"Gemini init failed: {e}. Falling back to HuggingFace.")
+            logger.warning(f"Gemini LLM init failed: {e}")
 
-    # ── Fallback: HuggingFace Inference API ──────────────────────────────
-    if not hf_api_token:
-        raise ValueError(
-            "No API key found. Please set HF_API_TOKEN or GEMINI_API_KEY in your .env file."
-        )
-
-    hf_model = model_name or "HuggingFaceH4/zephyr-7b-beta"
-    logger.info(f"Initializing HuggingFace LLM: {hf_model}")
-
-    from langchain_huggingface import HuggingFaceEndpoint
-    llm = HuggingFaceEndpoint(
-        repo_id=hf_model,
-        huggingfacehub_api_token=hf_api_token,
-        max_new_tokens=max_new_tokens,
-        temperature=temperature,
-        top_p=config.top_p,
-        # Let HF auto-select the best available provider
-        task="text-generation",
+    raise ValueError(
+        "Could not initialize any LLM. "
+        "Please check HF_API_TOKEN or GEMINI_API_KEY in your .env file."
     )
-    return llm
 
 
 def build_rag_chain(
