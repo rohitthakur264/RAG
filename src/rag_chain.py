@@ -56,15 +56,22 @@ def get_llm(
     if gemini_api_key:
         try:
             from langchain_google_genai import ChatGoogleGenerativeAI
-            logger.info("Initializing Gemini 1.5 Flash LLM")
+            logger.info("Initializing Gemini 2.0 Flash LLM")
             llm = ChatGoogleGenerativeAI(
-                model="gemini-1.5-flash",
+                model="gemini-2.0-flash",
                 google_api_key=gemini_api_key,
                 temperature=temperature,
                 max_output_tokens=max_new_tokens,
             )
             return llm
         except Exception as e:
+            err = str(e)
+            if "RESOURCE_EXHAUSTED" in err or "429" in err:
+                raise ValueError(
+                    "Gemini API rate limit reached (free tier). "
+                    "Please wait a minute and try again, or check your quota at "
+                    "https://ai.dev/rate-limit"
+                )
             logger.warning(f"Gemini init failed: {e}. Falling back to HuggingFace.")
 
     # ── Fallback: HuggingFace Inference API ──────────────────────────────
